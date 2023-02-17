@@ -3,7 +3,7 @@ from typing import Optional, Tuple, Union
 
 from dataclasses import dataclass
 import torch
-from torch.nn import CrossEntropyLoss, Linear
+from torch.nn import CrossEntropyLoss, Linear, Dropout
 from transformers import PreTrainedModel, AutoModelForCTC, AutoModelForCausalLM
 from transformers import SpeechEncoderDecoderConfig, PretrainedConfig, AutoConfig
 from transformers.modeling_outputs import Seq2SeqLMOutput, BaseModelOutput
@@ -120,6 +120,7 @@ class SpeechEncoderDecoderModel(PreTrainedModel):
         ):
             # encoder outputs might need to be projected to different dimension for decoder
             self.enc_to_dec_proj = Linear(self.encoder.config.hidden_size, self.decoder.config.hidden_size)
+            self.enc_to_dec_dropout = Dropout(p=0.3)
 
         # if self.encoder.get_output_embeddings() is not None:
         #     raise ValueError(
@@ -144,10 +145,6 @@ class SpeechEncoderDecoderModel(PreTrainedModel):
         return self.decoder.set_output_embeddings(new_embeddings)
 
     def freeze_feature_encoder(self):
-        """
-        Calling this function will disable the gradient computation for the feature encoder of the speech encoder so
-        that its parameters will not be updated during training.
-        """
         self.encoder.freeze_feature_encoder()
 
     @classmethod
@@ -169,55 +166,6 @@ class SpeechEncoderDecoderModel(PreTrainedModel):
         *model_args,
         **kwargs
     ) -> PreTrainedModel:
-        r"""
-        Instantiate an encoder and a decoder from one or two base classes of the library from pretrained model
-        checkpoints.
-        The model is set in evaluation mode by default using `model.eval()` (Dropout modules are deactivated). To train
-        the model, you need to first set it back in training mode with `model.train()`.
-        Params:
-            encoder_pretrained_model_name_or_path (`str`, *optional*):
-                Information necessary to initiate the encoder. Can be either:
-                    - A string, the *model id* of a pretrained model hosted inside a model repo on huggingface.co.
-                      Valid model ids can be located at the root-level, like `bert-base-uncased`, or namespaced under a
-                      user or organization name, like `dbmdz/bert-base-german-cased`.
-                    - A path to a *directory* containing model weights saved using
-                      [`~PreTrainedModel.save_pretrained`], e.g., `./my_model_directory/`.
-                    - A path or url to a *tensorflow index checkpoint file* (e.g, `./tf_model/model.ckpt.index`). In
-                      this case, `from_tf` should be set to `True` and a configuration object should be provided as
-                      `config` argument. This loading path is slower than converting the TensorFlow checkpoint in a
-                      PyTorch model using the provided conversion scripts and loading the PyTorch model afterwards.
-            decoder_pretrained_model_name_or_path (`str`, *optional*, defaults to `None`):
-                Information necessary to initiate the decoder. Can be either:
-                    - A string, the *model id* of a pretrained model hosted inside a model repo on huggingface.co.
-                      Valid model ids can be located at the root-level, like `bert-base-uncased`, or namespaced under a
-                      user or organization name, like `dbmdz/bert-base-german-cased`.
-                    - A path to a *directory* containing model weights saved using
-                      [`~PreTrainedModel.save_pretrained`], e.g., `./my_model_directory/`.
-                    - A path or url to a *tensorflow index checkpoint file* (e.g, `./tf_model/model.ckpt.index`). In
-                      this case, `from_tf` should be set to `True` and a configuration object should be provided as
-                      `config` argument. This loading path is slower than converting the TensorFlow checkpoint in a
-                      PyTorch model using the provided conversion scripts and loading the PyTorch model afterwards.
-            model_args (remaining positional arguments, *optional*):
-                All remaning positional arguments will be passed to the underlying model's `__init__` method.
-            kwargs (remaining dictionary of keyword arguments, *optional*):
-                Can be used to update the configuration object (after it being loaded) and initiate the model (e.g.,
-                `output_attentions=True`).
-                - To update the encoder configuration, use the prefix *encoder_* for each configuration parameter.
-                - To update the decoder configuration, use the prefix *decoder_* for each configuration parameter.
-                - To update the parent model configuration, do not use a prefix for each configuration parameter.
-                Behaves differently depending on whether a `config` is provided or automatically loaded.
-        Example:
-        ```python
-        >>> from transformers import SpeechEncoderDecoderModel
-        >>> # initialize a wav2vec2bert from a pretrained Wav2Vec2 and a pretrained BERT model. Note that the cross-attention layers will be randomly initialized
-        >>> model = SpeechEncoderDecoderModel.from_encoder_decoder_pretrained(
-        ...     "facebook/wav2vec2-base-960h", "bert-base-uncased"
-        ... )
-        >>> # saving model after fine-tuning
-        >>> model.save_pretrained("./wav2vec2bert")
-        >>> # load fine-tuned model
-        >>> model = SpeechEncoderDecoderModel.from_pretrained("./wav2vec2bert")
-        ```"""
 
         kwargs_encoder = {
             argument[len("encoder_") :]: value for argument, value in kwargs.items() if argument.startswith("encoder_")
@@ -381,7 +329,7 @@ class SpeechEncoderDecoderModel(PreTrainedModel):
             self.encoder_output_dim != self.decoder.config.hidden_size
             and self.decoder.config.cross_attention_hidden_size is None
         ):
-            encoder_hidden_states = self.enc_to_dec_proj(encoder_hidden_states)
+            encoder_hidden_states = self.enc_to_dec_dropout(self.enc_to_dec_proj(encoder_hidden_states))
 
         # compute correct encoder attention mask
         if attention_mask is not None:
